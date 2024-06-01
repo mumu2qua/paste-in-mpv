@@ -1,75 +1,69 @@
-function trim(s)
-   return (s:gsub("^%s*(%S+)%s*", "%1"))
+local function pick_paste_command()
+   if os.getenv("XDG_SESSION_TYPE") == 'wayland' then
+      return "wl-paste"
+   else
+      return ({ "xclip", "-o", "-selection", "clipboard" })
+   end
 end
 
-function check_os()
-	local os_path = package.config:sub(1,1)
-
-	if os_path == '\\' then
-		return 'windows'
-	elseif os_path == '/' then
-		return 'linux'
-	end
-
+local function urlencode(path)
+   if path == nil then
+      return
+   end
+   local char_to_hex = function(c)
+      return string.format("%%%02X", string.byte(c))
+   end
+   local url = path:gsub("([^%w_%%%-%.~/])", char_to_hex)
+   return url
 end
 
-function openURL()
-   
-	local g = check_os()
-	if g == 'linux' then 
-		subprocess = {
-		name = "subprocess",
-		args = { "xclip", "-o","-selection","clipboard"},
-		playback_only = false,
-		capture_stdout = true,
-		capture_stderr = true
-			}
-	elseif g == 'windows' then 
-		subprocess = {
-		name = "subprocess",
-		args = { "powershell", "-Command", "Get-Clipboard", "-Raw" },
-		playback_only = false,
-		capture_stdout = true,
-		capture_stderr = true
-			}
-	end
-   
+local function make_list(strings)
+   local urls = {}
+   for s in strings:gmatch("[^\r\n]+") do
+      -- trim trailing spaces from both sides
+      s = s:gsub('^%s*(.-)%s*$', '%1')
+      -- convert filenames to URLs
+      if s:match("^/.+") then
+         s = 'file://'..urlencode(s)
+      end
+      table.insert(urls, s)
+   end
+   return urls
+end
+
+local function openURL()
+   local subprocess = {
+      name = "subprocess",
+      args = pick_paste_command(),
+      playback_only = false,
+      capture_stdout = true,
+      capture_stderr = true
+   }
+
    mp.osd_message("Getting URL from clipboard...")
-   
-   r = mp.command_native(subprocess)
-   
-   --failed getting clipboard data for some reason
+
+   local r = mp.command_native(subprocess)
+
+   -- failed getting clipboard data for some reason
    if r.status < 0 then
       mp.osd_message("Failed getting clipboard data!")
       print("Error(string): "..r.error_string)
       print("Error(stderr): "..r.stderr)
    end
-   
-   url = r.stdout
-   
-   if not url then
-      return
-   end
-   
-   --trim whitespace from string
-   url=trim(url)
 
-   if not url then
+   local urls = make_list(r.stdout)
+   if not urls[1] then
       mp.osd_message("clipboard empty")
       return
    end
-   
-   --immediately resume playback after loading URL
-   if mp.get_property_bool("core-idle") then
-      if not mp.get_property_bool("idle-active") then
-         mp.command("keypress space")
-      end
-   end
 
-   --try opening url
-   --will fail if url is not valid
-   mp.osd_message("Try Opening URL:\n"..url)
-   mp.commandv("loadfile", url, "replace")
+   for i=1, #urls do
+      -- MPV will exit if any of urls are invalid
+      mp.osd_message("Appending to playlist:\n".. urls[i])
+      mp.commandv("loadfile", urls[i], "append-play")
+   end
 end
 
 mp.add_key_binding("ctrl+v", openURL)
+
+-- vim: ts=3 sts=3 sw=3 et
